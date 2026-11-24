@@ -1,0 +1,691 @@
+// This is your Prisma schema file.
+// Learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Enums
+
+enum Role {
+  user     @map("RIDER")
+  vendor   @map("VENDOR")
+  admin    @map("ADMIN")
+  partner  @map("PARTNER")
+  support  @map("SUPPORT")
+
+  @@map("user_role")
+}
+
+enum VendorStatus {
+  pending
+  approved
+  rejected
+}
+
+enum VideoKycStatus {
+  not_required
+  in_progress
+  pending
+  approved
+  rejected
+}
+
+enum VehicleType {
+  bike
+  car
+  loading
+  truck
+  auto
+}
+
+enum ApprovalStatus {
+  approved
+  pending
+  rejected
+}
+
+enum BankStatus {
+  not_added
+  added
+  verified
+}
+
+enum BookingStatus {
+  requested
+  awaiting_payment
+  confirmed
+  started
+  rejected
+  expired
+  pending
+  active
+  completed
+  cancelled
+}
+
+enum PaymentStatus {
+  pending
+  paid
+  cash
+  failed
+}
+
+// Models
+
+model User {
+  id                      String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                    String         @db.VarChar(120)
+  email                   String         @unique(map: "idx_users_email_unique") @db.VarChar(255)
+  password                String?        @map("password_hash") @db.VarChar(255)
+  image                   String?
+  role                    Role           @default(user)
+  isVerified              Boolean        @default(false) @map("is_verified")
+  emailVerifiedAt         DateTime?      @map("email_verified_at") @db.Timestamptz(6)
+  phoneNumber             String?        @map("phone_number") @db.VarChar(32)
+  phoneVerifiedAt         DateTime?      @map("phone_verified_at") @db.Timestamptz(6)
+  accountStatus           AuthAccountStatus @default(PENDING) @map("account_status")
+  passwordChangedAt      DateTime?      @map("password_changed_at") @db.Timestamptz(6)
+  suspendedAt            DateTime?      @map("suspended_at") @db.Timestamptz(6)
+  suspensionReason        String?        @map("suspension_reason")
+  blockedAt               DateTime?      @map("blocked_at") @db.Timestamptz(6)
+  blockedReason           String?        @map("blocked_reason")
+  deletedAt               DateTime?      @map("deleted_at") @db.Timestamptz(6)
+  mfaFailedAttempts       Int            @default(0) @map("mfa_failed_attempts")
+  mfaLastFailedAt         DateTime?      @map("mfa_last_failed_at") @db.Timestamptz(6)
+  mfaLockedUntil          DateTime?      @map("mfa_locked_until") @db.Timestamptz(6)
+  lastLoginAt             DateTime?      @map("last_login_at") @db.Timestamptz(6)
+  vendorOnboardingStep    Int            @default(0)
+  vendorStatus            VendorStatus   @default(pending)
+  vendorRejectionReason   String?        @default("")
+  vendorProfileCompleted  Boolean        @default(false)
+  vendorApprovedAt        DateTime?
+  isVendorBlocked         Boolean        @default(false)
+  videoKycStatus          VideoKycStatus @default(not_required)
+  videoKycRoomId          String?
+  videoKycRejectionReason String?
+  isOnline                Boolean        @default(false)
+  socketId                String?
+  currentVehicleType      VehicleType?
+  locationLng             Float?
+  locationLat             Float?
+  lastLocationUpdate      DateTime?
+  createdAt               DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt               DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  vehicleId               String?        @unique @db.Uuid
+  vehicle                 Vehicle?       @relation("OwnerVehicle", fields: [vehicleId], references: [id])
+  ownedVehicle            Vehicle?       @relation("VehicleOwner")
+  partnerBank             PartnerBank?
+  partnerDocs             PartnerDocs?
+  bookingsAsVendor        Booking[]      @relation("VendorBookings")
+  bookingsAsUser          Booking[]      @relation("UserBookings")
+  signupRiskEvaluations   SignupRiskEvaluation[]
+  otpChallenges           OtpChallenge[]
+  trustedDevices          TrustedDevice[]
+  sessions                UserSession[]
+  refreshTokens           RefreshToken[]
+  oauthIdentities         OauthIdentity[]
+  authAuditLogs            AuthAuditLog[]
+
+  @@index([role])
+  @@index([accountStatus, isVerified], map: "idx_users_status_verified")
+  @@index([deletedAt], map: "idx_users_deleted_at")
+  @@index([accountStatus, mfaLockedUntil], map: "idx_users_mfa_lockout")
+  @@map("users")
+}
+
+model Vehicle {
+  id              String         @id @default(uuid()) @db.Uuid
+  ownerId         String         @unique @db.Uuid
+  owner           User           @relation("VehicleOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  type            VehicleType
+  vehicleModel    String
+  number          String         @unique
+  imageUrl        String?
+  baseFare        Float          @default(0)
+  pricePerKM      Float          @default(0)
+  waitingCharge   Float          @default(0)
+  status          ApprovalStatus @default(pending)
+  rejectionReason String?        @default("")
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  assignedToUser  User?          @relation("OwnerVehicle")
+  bookings        Booking[]
+
+  @@index([status])
+}
+
+model PartnerBank {
+  id            String     @id @default(uuid()) @db.Uuid
+  ownerId       String     @unique @db.Uuid
+  owner         User       @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  accountHolder String
+  accountNumber String
+  ifsc          String
+  upi           String?
+  mobileNumber  String
+  status        BankStatus @default(not_added)
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+}
+
+model PartnerDocs {
+  id              String         @id @default(uuid()) @db.Uuid
+  ownerId         String         @unique @db.Uuid
+  owner           User           @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  aadharUrl       String
+  rcUrl           String
+  licenseUrl      String
+  status          ApprovalStatus @default(pending)
+  rejectionReason String?        @default("")
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+}
+
+model Booking {
+  id                  String        @id @default(uuid()) @db.Uuid
+  vendorId            String        @db.Uuid
+  vendor              User          @relation("VendorBookings", fields: [vendorId], references: [id])
+  vehicleId           String        @db.Uuid
+  vehicle             Vehicle       @relation(fields: [vehicleId], references: [id])
+  userId              String        @db.Uuid
+  user                User          @relation("UserBookings", fields: [userId], references: [id])
+  fare                Float
+  status              BookingStatus @default(requested)
+  pickupAddress       String        @default("")
+  dropAddress         String        @default("")
+  pickupLocation      Json?
+  dropLocation        Json?
+  userMobileNumber    String        @default("")
+  driverMobileNumber  String        @default("")
+  paymentStatus       PaymentStatus @default(pending)
+  paymentMethod       String?
+  paymentOrderId     String?
+  paymentDeadline     DateTime?
+  pickupOtp           String?
+  dropOtp             String?
+  pickupAt            DateTime?
+  completedAt         DateTime?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  @@index([vendorId])
+  @@index([vehicleId])
+  @@index([status])
+  @@index([completedAt])
+  @@index([vendorId, completedAt, status])
+}
+
+enum AccountStatus {
+  active
+  suspended
+  deactivation_requested
+  deletion_requested
+  deleted
+}
+
+enum AuthAccountStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  BLOCKED
+  DELETED
+
+  @@map("account_status")
+}
+
+enum AccountRequestType {
+  deactivation
+  reactivation
+  deletion
+}
+
+enum AccountRequestStatus {
+  pending
+  approved
+  rejected
+  cancelled
+}
+
+model UserProfile {
+  userId         String   @id @db.Uuid
+  name           String?
+  phone          String?
+  photoUrl       String?
+  addressLine1   String?
+  addressLine2   String?
+  city           String?
+  state          String?
+  postalCode     String?
+  country        String?
+  contactDetails String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model UserAccount {
+  userId      String               @id @db.Uuid
+  status      AccountStatus        @default(active)
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+  requests    AccountRequest[]
+  auditEvents AccountAuditEvent[]
+}
+
+model AccountRequest {
+  id             String              @id @default(uuid()) @db.Uuid
+  userId         String              @db.Uuid
+  type           AccountRequestType
+  status         AccountRequestStatus @default(pending)
+  previousStatus AccountStatus?
+  note           String?
+  requestedAt    DateTime             @default(now())
+  resolvedAt     DateTime?
+  account        UserAccount          @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  @@index([userId, requestedAt])
+}
+
+model AccountAuditEvent {
+  id        String      @id @default(uuid()) @db.Uuid
+  userId    String      @db.Uuid
+  actorId   String      @db.Uuid
+  action    String
+  details   String?
+  createdAt DateTime    @default(now())
+  account   UserAccount @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
+
+enum AuthFlowIntent {
+  CREDENTIALS_SIGNUP
+  CREDENTIALS_SIGNIN
+  GOOGLE_OAUTH_SIGNUP
+  GOOGLE_OAUTH_SIGNIN
+  PASSWORD_RECOVERY
+  PASSWORD_CHANGE
+  ACCOUNT_ACTIVATION
+  ACCOUNT_RECOVERY
+  ACCOUNT_DELETION
+  OTP_VERIFICATION
+  OTP_RESEND
+  TOKEN_REFRESH
+  SESSION_LOGOUT
+  SESSION_LOGOUT_ALL
+  SESSION_REVOKE
+
+  @@map("auth_flow_intent")
+}
+
+enum RiskDecision {
+  ALLOW
+  CHALLENGE_OTP
+  REJECT
+
+  @@map("risk_decision")
+}
+
+enum OtpPurpose {
+  EMAIL_VERIF
+  RISK_CHALLENGE
+  STEP_UP_MFA
+  PASSWORD_RECOVERY
+  ACCOUNT_RECOVERY
+  ACCOUNT_DELETION
+
+  @@map("otp_purpose")
+}
+
+enum OtpOriginatingFlow {
+  NEW_SIGNUP
+  EXISTING_SIGNIN
+  ACCOUNT_ACTIVATION
+  ACCOUNT_RECOVERY
+  PASSWORD_RECOVERY
+  ACCOUNT_DELETION
+
+  @@map("otp_originating_flow")
+}
+
+enum OauthProvider {
+  GOOGLE
+
+  @@map("oauth_provider")
+}
+
+enum OauthLinkMethod {
+  INITIAL_SIGNUP
+  AUTO_VERIFIED_LINK
+  OTP_VERIFIED_LINK
+
+  @@map("oauth_link_method")
+}
+
+enum SessionRevokeReason {
+  CONCURRENCY_LIMIT_EXCEEDED
+  USER_LOGOUT
+  TOKEN_ROTATION
+  REUSE_DETECTED
+  ADMIN_OR_SECURITY_LOCK
+
+  @@map("session_revoke_reason")
+}
+
+enum OauthTransactionStatus {
+  INITIATED
+  CALLBACK_PROCESSING
+  SUCCEEDED
+  FAILED
+  DENIED
+  EXPIRED
+
+  @@map("oauth_transaction_status")
+}
+
+enum OauthResolutionCase {
+  CASE_A
+  CASE_B
+  CASE_C
+
+  @@map("oauth_resolution_case")
+}
+
+enum OtpChallengeStatus {
+  ACTIVE
+  USED
+  EXPIRED
+  LOCKED
+  SUPERSEDED
+  REVOKED
+
+  @@map("otp_challenge_status")
+}
+
+enum WafSecurityAction {
+  ALLOW
+  BLOCK
+  CAPTCHA
+  CHALLENGE
+  COUNT
+
+  @@map("waf_security_action")
+}
+
+enum WafChallengeType {
+  CAPTCHA
+  JS_CHALLENGE
+
+  @@map("waf_challenge_type")
+}
+
+enum WafChallengeStatus {
+  NOT_APPLICABLE
+  PENDING
+  PASSED
+  FAILED
+  EXPIRED
+
+  @@map("waf_challenge_status")
+}
+
+enum NginxLimitStatus {
+  ALLOWED
+  RATE_LIMITED
+  CONNECTION_LIMITED
+  REJECTED
+
+  @@map("nginx_limit_status")
+}
+
+enum GatewayDecisionStatus {
+  ALLOWED
+  RATE_LIMITED
+  REJECTED
+
+  @@map("gateway_decision_status")
+}
+
+enum GatewayPolicyStatus {
+  ALLOWED
+  DENIED
+  ERROR
+
+  @@map("gateway_policy_status")
+}
+
+enum SecurityEventType {
+  SIGNUP_RISK_REJECTED
+  SIGNUP_RISK_OTP_FAILED
+  RESTRICTED_ACCOUNT_ACCESS_ATTEMPT
+  CREDENTIALS_INVALID_PASSWORD
+  OTP_MAX_ATTEMPTS_LOCKOUT
+  OAUTH_STATE_MISMATCH_OR_REPLAY
+  OAUTH_TOKEN_EXCHANGE_FAILED
+  OAUTH_ID_TOKEN_VALIDATION_FAILED
+  OAUTH_UNVERIFIED_EMAIL_REJECTED
+  STEP_UP_MFA_LOCKOUT
+  NEW_DEVICE_SIGNIN_DETECTED
+  SESSION_REVOKED_CONCURRENCY
+  REFRESH_TOKEN_REUSE_DETECTED
+
+  @@map("security_event_type")
+}
+
+model SignupRiskEvaluation {
+  id                       String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId                   String?               @map("user_id") @db.Uuid
+  emailNormalized          String?               @map("email_normalized") @db.VarChar(255)
+  flowIntent               AuthFlowIntent        @map("flow_intent")
+  edgeRequestId            String                @map("edge_request_id") @db.VarChar(128)
+  wafBotScore              Int?                  @map("waf_bot_score")
+  wafBotSignals            Unsupported("text[]")? @map("waf_bot_signals")
+  wafIpReputation          String?               @map("waf_ip_reputation") @db.VarChar(64)
+  wafSecurityAction        WafSecurityAction     @map("waf_security_action")
+  wafChallengeType         WafChallengeType?     @map("waf_challenge_type")
+  wafChallengeStatus       WafChallengeStatus    @default(NOT_APPLICABLE) @map("waf_challenge_status")
+  wafRateLimitTriggered    Boolean               @default(false) @map("waf_rate_limit_triggered")
+  nginxRequestId           String                @map("nginx_request_id") @db.VarChar(128)
+  clientIp                 String                @map("client_ip") @db.Inet
+  peerIp                   String                @map("peer_ip") @db.Inet
+  requestMethod            String                @map("request_method") @db.VarChar(10)
+  requestUri               String                @map("request_uri") @db.VarChar(512)
+  connectionConcurrency   Int?                  @map("connection_concurrency")
+  connectionLimitStatus   NginxLimitStatus      @map("connection_limit_status")
+  localRateLimitOutcome   NginxLimitStatus      @map("local_rate_limit_outcome")
+  gatewayRequestId        String                @map("gateway_request_id") @db.VarChar(128)
+  gatewayRateLimitStatus  GatewayDecisionStatus @map("gateway_rate_limit_status")
+  gatewayPolicyStatus     GatewayPolicyStatus   @map("gateway_policy_status")
+  upstreamService         String                @default("AUTH_SERVICE") @map("upstream_service") @db.VarChar(100)
+  deviceFingerprintHash   String                @map("device_fingerprint_hash") @db.Char(64)
+  userAgent               String                @map("user_agent")
+  coarseLocation          String?               @map("coarse_location") @db.VarChar(120)
+  isDisposableEmail       Boolean               @default(false) @map("is_disposable_email")
+  isRateOrSubnetSurge     Boolean               @default(false) @map("is_rate_or_subnet_surge")
+  totalRiskScore          Int                   @map("total_risk_score")
+  decision                RiskDecision
+  riskOtpChallengeId      String?               @map("risk_otp_challenge_id") @db.Uuid
+  riskOtpPassed           Boolean?              @map("risk_otp_passed")
+  createdAt               DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  user                    User?                 @relation(fields: [userId], references: [id], onDelete: SetNull)
+  riskOtpChallenge        OtpChallenge?         @relation("RiskOtpChallenge", fields: [riskOtpChallengeId], references: [id], onDelete: SetNull)
+  oauthPkceStates         OauthPkceState[]
+
+  @@index([emailNormalized], map: "idx_risk_eval_email")
+  @@index([clientIp], map: "idx_risk_eval_ip")
+  @@index([deviceFingerprintHash], map: "idx_risk_eval_device_fp")
+  @@index([createdAt], map: "idx_risk_eval_created_at")
+  @@index([edgeRequestId], map: "idx_risk_eval_edge_request")
+  @@index([nginxRequestId], map: "idx_risk_eval_nginx_request")
+  @@index([gatewayRequestId], map: "idx_risk_eval_gateway_request")
+  @@index([flowIntent], map: "idx_risk_eval_flow_intent")
+  @@index([decision], map: "idx_risk_eval_decision")
+  @@map("signup_risk_evaluations")
+}
+
+model OtpChallenge {
+  id                      String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId                  String?                @map("user_id") @db.Uuid
+  emailNormalized         String                 @map("email_normalized") @db.VarChar(255)
+  purpose                 OtpPurpose
+  originatingFlow         OtpOriginatingFlow     @map("originating_flow")
+  originatingFlowIntent   AuthFlowIntent         @map("originating_flow_intent")
+  otpHash                 String                 @map("otp_hash") @db.Char(64)
+  attempts                Int                    @default(0)
+  maxAttempts             Int                    @default(5) @map("max_attempts")
+  isLocked                Boolean                @default(false) @map("is_locked")
+  pendingOauthProvider    OauthProvider?         @map("pending_oauth_provider")
+  pendingOauthSub         String?                @map("pending_oauth_sub") @db.VarChar(255)
+  pendingOauthName        String?                @map("pending_oauth_name") @db.VarChar(120)
+  requestIp               String                 @map("request_ip") @db.Inet
+  deviceFingerprintHash   String                 @map("device_fingerprint_hash") @db.Char(64)
+  expiresAt               DateTime               @map("expires_at") @db.Timestamptz(6)
+  usedAt                  DateTime?              @map("used_at") @db.Timestamptz(6)
+  revokedAt               DateTime?              @map("revoked_at") @db.Timestamptz(6)
+  createdAt               DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  user                    User?                  @relation(fields: [userId], references: [id], onDelete: SetNull)
+  riskEvaluations         SignupRiskEvaluation[] @relation("RiskOtpChallenge")
+
+  @@index([userId, purpose, usedAt], map: "idx_otp_user_purpose_used")
+  @@index([emailNormalized, purpose, expiresAt], map: "idx_otp_email_purpose_expiry")
+  @@index([expiresAt], map: "idx_otp_expiry")
+  @@index([deviceFingerprintHash, createdAt], map: "idx_otp_device_created")
+  @@map("otp_challenges")
+}
+
+model TrustedDevice {
+  id                     String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId                 String               @map("user_id") @db.Uuid
+  deviceFingerprintHash  String               @map("device_fingerprint_hash") @db.Char(64)
+  browser                String?              @db.VarChar(80)
+  os                     String?              @db.VarChar(80)
+  userAgent              String               @map("user_agent")
+  lastIp                 String               @map("last_ip") @db.Inet
+  coarseLocation         String?              @map("coarse_location") @db.VarChar(120)
+  isInitialSignupDevice  Boolean              @default(false) @map("is_initial_signup_device")
+  isRevoked              Boolean              @default(false) @map("is_revoked")
+  lastSeenAt             DateTime             @default(now()) @map("last_seen_at") @db.Timestamptz(6)
+  trustedUntil           DateTime             @map("trusted_until") @db.Timestamptz(6)
+  createdAt              DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  user                   User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessions               UserSession[]
+
+  @@unique([userId, deviceFingerprintHash], map: "idx_trusted_devices_user_fp_unique")
+  @@index([userId, isRevoked, trustedUntil], map: "idx_trusted_devices_active_lookup")
+  @@map("trusted_devices")
+}
+
+model UserSession {
+  id                    String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId                String                @map("user_id") @db.Uuid
+  trustedDeviceId       String?               @map("trusted_device_id") @db.Uuid
+  familyId              String                @unique @default(dbgenerated("gen_random_uuid()")) @map("family_id") @db.Uuid
+  clientIp              String                @map("client_ip") @db.Inet
+  deviceFingerprintHash String                @map("device_fingerprint_hash") @db.Char(64)
+  isActive              Boolean               @default(true) @map("is_active")
+  revokedAt             DateTime?             @map("revoked_at") @db.Timestamptz(6)
+  revokeReason          SessionRevokeReason?  @map("revoke_reason")
+  lastActiveAt          DateTime              @default(now()) @map("last_active_at") @db.Timestamptz(6)
+  expiresAt             DateTime              @map("expires_at") @db.Timestamptz(6)
+  createdAt             DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  user                  User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trustedDevice         TrustedDevice?        @relation(fields: [trustedDeviceId], references: [id], onDelete: SetNull)
+  refreshTokens         RefreshToken[]
+
+  @@index([userId, isActive, createdAt], map: "idx_sessions_user_active_fifo")
+  @@index([familyId], map: "idx_sessions_family_id")
+  @@map("user_sessions")
+}
+
+model RefreshToken {
+  id           String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sessionId    String        @map("session_id") @db.Uuid
+  userId       String        @map("user_id") @db.Uuid
+  familyId     String        @map("family_id") @db.Uuid
+  tokenHash    String        @unique @map("token_hash") @db.Char(64)
+  parentTokenId String?      @map("parent_token_id") @db.Uuid
+  isRevoked    Boolean       @default(false) @map("is_revoked")
+  usedAt       DateTime?     @map("used_at") @db.Timestamptz(6)
+  revokedAt    DateTime?     @map("revoked_at") @db.Timestamptz(6)
+  expiresAt    DateTime      @map("expires_at") @db.Timestamptz(6)
+  createdAt    DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  session      UserSession   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parent       RefreshToken? @relation("RefreshTokenRotation", fields: [parentTokenId], references: [id], onDelete: SetNull)
+  children     RefreshToken[] @relation("RefreshTokenRotation")
+
+  @@index([tokenHash], map: "idx_refresh_tokens_hash")
+  @@index([familyId], map: "idx_refresh_tokens_family")
+  @@index([sessionId, isRevoked], map: "idx_refresh_tokens_session_active")
+  @@map("refresh_tokens")
+}
+
+model OauthPkceState {
+  id                    String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  stateHash             String                @unique @map("state_hash") @db.Char(64)
+  codeVerifierEncrypted String                @map("code_verifier_encrypted")
+  codeChallenge         String                @map("code_challenge") @db.VarChar(128)
+  codeChallengeMethod   String                @default("S256") @map("code_challenge_method") @db.VarChar(10)
+  flowIntent            AuthFlowIntent        @map("flow_intent")
+  wasRiskChecked        Boolean               @default(false) @map("was_risk_checked")
+  riskEvaluationId      String?               @map("risk_evaluation_id") @db.Uuid
+  redirectUri           String                @map("redirect_uri")
+  clientIp              Unsupported("inet")  @map("client_ip")
+  deviceFingerprintHash String                @map("device_fingerprint_hash") @db.Char(64)
+  userAgent             String                @map("user_agent")
+  expiresAt             DateTime              @map("expires_at") @db.Timestamptz(6)
+  consumedAt            DateTime?             @map("consumed_at") @db.Timestamptz(6)
+  createdAt             DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  riskEvaluation        SignupRiskEvaluation?  @relation(fields: [riskEvaluationId], references: [id], onDelete: SetNull)
+
+  @@index([stateHash], map: "idx_oauth_pkce_state_hash")
+  @@index([expiresAt], map: "idx_oauth_pkce_expires_at")
+  @@map("oauth_pkce_states")
+}
+
+model OauthIdentity {
+  id                    String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId                String          @map("user_id") @db.Uuid
+  provider              OauthProvider   @default(GOOGLE)
+  providerUserId        String          @map("provider_user_id") @db.VarChar(255)
+  providerEmail         String          @map("provider_email") @db.VarChar(255)
+  providerEmailVerified Boolean         @default(true) @map("provider_email_verified")
+  providerName          String?         @map("provider_name") @db.VarChar(120)
+  linkedVia             OauthLinkMethod @map("linked_via")
+  lastUsedAt            DateTime        @default(now()) @map("last_used_at") @db.Timestamptz(6)
+  createdAt             DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime        @default(now()) @map("updated_at") @db.Timestamptz(6)
+  user                  User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerUserId], map: "idx_oauth_provider_sub_unique")
+  @@unique([userId, provider], map: "idx_oauth_user_provider_unique")
+  @@index([providerEmail], map: "idx_oauth_provider_email")
+  @@map("oauth_identities")
+}
+
+model AuthAuditLog {
+  id                    String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId                String?           @map("user_id") @db.Uuid
+  emailAttempted        String?           @map("email_attempted") @db.VarChar(255)
+  eventType             SecurityEventType @map("event_type")
+  flowIntent            AuthFlowIntent?   @map("flow_intent")
+  nginxRequestId        String?           @map("nginx_request_id") @db.VarChar(128)
+  clientIp              String                @map("client_ip") @db.Inet
+  deviceFingerprintHash String?           @map("device_fingerprint_hash") @db.Char(64)
+  userAgent             String?           @map("user_agent")
+  metadata              Json?             @db.JsonB
+  createdAt             DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  user                  User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt], map: "idx_audit_user_time")
+  @@index([eventType, createdAt], map: "idx_audit_event_time")
+  @@index([clientIp], map: "idx_audit_client_ip")
+  @@map("auth_audit_logs")
+}

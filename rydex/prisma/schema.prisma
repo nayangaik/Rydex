@@ -1,0 +1,174 @@
+// This is your Prisma schema file.
+// Learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Enums
+
+enum Role {
+  user
+  vendor
+  admin
+  partner
+}
+
+enum VendorStatus {
+  pending
+  approved
+  rejected
+}
+
+enum VideoKycStatus {
+  not_required
+  in_progress
+  pending
+  approved
+  rejected
+}
+
+enum VehicleType {
+  bike
+  car
+  loading
+  truck
+  auto
+}
+
+enum ApprovalStatus {
+  approved
+  pending
+  rejected
+}
+
+enum BankStatus {
+  not_added
+  added
+  verified
+}
+
+enum BookingStatus {
+  pending
+  active
+  completed
+  cancelled
+}
+
+// Models
+
+model User {
+  id                      String         @id @default(cuid())
+  name                    String
+  email                   String         @unique
+  password                String?
+  image                   String?
+  role                    Role           @default(user)
+  isVerified              Boolean        @default(false)
+  otp                     String?
+  otpExpiry               DateTime?
+  vendorOnboardingStep    Int            @default(0)
+  vendorStatus            VendorStatus   @default(pending)
+  vendorRejectionReason   String?        @default("")
+  vendorProfileCompleted  Boolean        @default(false)
+  vendorApprovedAt        DateTime?
+  isVendorBlocked         Boolean        @default(false)
+  videoKycStatus          VideoKycStatus @default(not_required)
+  videoKycRoomId          String?
+  videoKycRejectionReason String?
+  isOnline                Boolean        @default(false)
+  socketId                String?
+  currentVehicleType      VehicleType?
+  locationLng             Float?
+  locationLat             Float?
+  lastLocationUpdate      DateTime?
+  createdAt               DateTime       @default(now())
+  updatedAt               DateTime       @updatedAt
+
+  vehicleId               String?        @unique
+  vehicle                 Vehicle?       @relation("OwnerVehicle", fields: [vehicleId], references: [id])
+  ownedVehicle            Vehicle?       @relation("VehicleOwner")
+  partnerBank             PartnerBank?
+  partnerDocs             PartnerDocs?
+  bookingsAsVendor        Booking[]      @relation("VendorBookings")
+  bookingsAsUser          Booking[]      @relation("UserBookings")
+
+  @@index([email])
+  @@index([role])
+}
+
+model Vehicle {
+  id              String         @id @default(cuid())
+  ownerId         String         @unique
+  owner           User           @relation("VehicleOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  type            VehicleType
+  vehicleModel    String
+  number          String         @unique
+  imageUrl        String?
+  baseFare        Float          @default(0)
+  pricePerKM      Float          @default(0)
+  waitingCharge   Float          @default(0)
+  status          ApprovalStatus @default(pending)
+  rejectionReason String?        @default("")
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  assignedToUser  User?          @relation("OwnerVehicle")
+  bookings        Booking[]
+
+  @@index([status])
+}
+
+model PartnerBank {
+  id            String     @id @default(cuid())
+  ownerId       String     @unique
+  owner         User       @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  accountHolder String
+  accountNumber String
+  ifsc          String
+  upi           String?
+  mobileNumber  String
+  status        BankStatus @default(not_added)
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+}
+
+model PartnerDocs {
+  id              String         @id @default(cuid())
+  ownerId         String         @unique
+  owner           User           @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  aadharUrl       String
+  rcUrl           String
+  licenseUrl      String
+  status          ApprovalStatus @default(pending)
+  rejectionReason String?        @default("")
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+}
+
+model Booking {
+  id          String        @id @default(cuid())
+  vendorId    String
+  vendor      User          @relation("VendorBookings", fields: [vendorId], references: [id])
+  vehicleId   String
+  vehicle     Vehicle       @relation(fields: [vehicleId], references: [id])
+  userId      String
+  user        User          @relation("UserBookings", fields: [userId], references: [id])
+  fare        Float
+  status      BookingStatus @default(pending)
+  pickupAt    DateTime?
+  completedAt DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@index([vendorId])
+  @@index([vehicleId])
+  @@index([status])
+  @@index([completedAt])
+  @@index([vendorId, completedAt, status])
+}
