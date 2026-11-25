@@ -11,7 +11,6 @@
 import bcrypt from 'bcryptjs'
 import { sendMail } from '../lib/email.js'
 import prisma from '../lib/db.js'
-import { signin } from './SignIn.controller.js'
 
 import {
   generateOtp,
@@ -287,13 +286,6 @@ export async function register(req, res) {
         }
 
         // Deleted < 90 days → ACCOUNT_RECOVERY OTP flow.
-        if (!isVerified) {
-          return res.status(403).json({
-            success: false,
-            message: 'We are unable to process your sign-up request.',
-          })
-        }
-
         const recoveryOtp = generateOtp()
 
         const challenge = await prisma.$transaction(async (tx) => {
@@ -346,14 +338,103 @@ export async function register(req, res) {
       })
       }
 
-     
+      // ── CASE C — PENDING + UNVERIFIED (re-send activation OTP) ──
+      if (accountStatus === 'PENDING' && !isVerified) {
+        const activationOtp = generateOtp()
 
-      // Verified accounts, including accounts awaiting first session creation,
-      // must use the sign-in workflow. A successful session promotes PENDING to
-      // ACTIVE; routing PENDING directly to email verification would be invalid
-      // because its email has already been verified.
+        const challenge = await prisma.$transaction(async (tx) => {
+          await tx.otpChallenge.updateMany({
+            where: {
+              userId,
+              purpose:         'EMAIL_VERIF',
+              originatingFlow: 'ACCOUNT_ACTIVATION',
+              usedAt:    null,
+              revokedAt: null,
+            },
+            data: { revokedAt: now },
+          })
+
+          return tx.otpChallenge.create({
+            data: {
+              userId,
+              emailNormalized:       email,
+              purpose:               'EMAIL_VERIF',
+              originatingFlow:       'ACCOUNT_ACTIVATION',
+              originatingFlowIntent: 'CREDENTIALS_SIGNUP',
+              otpHash:               hashOtp(activationOtp),
+              requestIp:             clientIp,
+              deviceFingerprintHash: fingerprint,
+              expiresAt:             new Date(now.getTime() + OTP_TTL_MS),
+            },
+          })
+        })
+
+        await sendMail(
+          email,
+          'Activate Your Rydex Account',
+          `
+            <div style="font-family:Arial,sans-serif">
+              <h2>Activate Your Rydex Account</h2>
+              <p>Use the following OTP to verify your email.</p>
+              <h1>${activationOtp}</h1>
+              <p>This OTP expires in 10 minutes.</p>
+            </div>
+          `
+        )
+
+      setOtpChallengeCookie(res, challenge.id)
+
+      return res.status(202).json({
+      success:  true,
+      message:  'Verification code sent to activate your account.',
+      nextStep: 'EMAIL_VERIFICATION',
+      })
+      }
+
+      // ── CASE D — ACTIVE + VERIFIED  or  PENDING + VERIFIED ──────
       if (isVerified && ['ACTIVE', 'PENDING'].includes(accountStatus)) {
-        return signin(req, res)
+        if (!passwordHash) {
+          const googleIdentity = await prisma.oauthIdentity.findFirst({
+            where:  { userId, provider: 'GOOGLE' },
+            select: { id: true },
+          })
+
+          if (googleIdentity) {
+            return res.status(409).json({
+              success: false,
+              action:  'GOOGLE_SIGNIN',
+              message: 'This account uses Google sign-in.',
+            })
+          }
+
+          return res.status(409).json({
+            success: false,
+            message: 'Unable to process this sign-up request.',
+          })
+        }
+
+        const passwordMatches = await bcrypt.compare(password, passwordHash)
+
+        if (!passwordMatches) {
+          await writeSignupAudit({
+            userId, email,
+            eventType: 'CREDENTIALS_INVALID_PASSWORD',
+            context,
+            metadata: { source: 'SIGNUP_EMAIL_CONFLICT', accountStatus },
+          })
+          return res.status(401).json({
+            success: false,
+            message: 'Invalid email or password.',
+          })
+        }
+
+        // Password matches — guide the client to the sign-in flow.
+        return res.status(409).json({
+          success:  true,
+          action:   'CREDENTIALS_SIGNIN',
+          message:  'Account already exists. Continue with sign-in.',
+          nextStep: 'CREDENTIALS_SIGNIN',
+        })
       }
 
       return res.status(403).json({

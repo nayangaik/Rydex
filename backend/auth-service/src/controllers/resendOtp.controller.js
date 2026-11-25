@@ -137,17 +137,11 @@ export async function resendOtp(req, res) {
       originatingFlow === 'ACCOUNT_RECOVERY' &&
       originatingFlowIntent === 'CREDENTIALS_SIGNUP'
 
-    const isAccountRecoveryMfa =
-      purpose === 'STEP_UP_MFA' &&
-      originatingFlow === 'ACCOUNT_RECOVERY' &&
-      originatingFlowIntent === 'CREDENTIALS_SIGNIN'
-
     if (
       !isRiskChallenge &&
       !isNewSignupEmailVerification &&
       !isAccountActivation &&
-      !isAccountRecovery &&
-      !isAccountRecoveryMfa
+      !isAccountRecovery
     ) {
       return res.status(400).json({
         success: false,
@@ -194,12 +188,12 @@ export async function resendOtp(req, res) {
       }
     }
 
-    if (isAccountRecovery || isAccountRecoveryMfa) {
+    if (isAccountRecovery) {
       const cutoff = user.deletedAt
         ? new Date(user.deletedAt.getTime() + 90 * 86_400_000)
         : null
 
-      if (user.accountStatus !== 'DELETED' || !user.isVerified || !cutoff || now >= cutoff) {
+      if (user.accountStatus !== 'DELETED' || !cutoff || now >= cutoff) {
         return res.status(403).json({
           success: false,
           message: 'Account is not eligible for OTP resend.',
@@ -347,9 +341,7 @@ export async function resendOtp(req, res) {
       message:        'A new OTP has been sent to your email.',
       nextStep:       isRiskChallenge
         ? 'RISK_OTP_VERIFICATION'
-        : isAccountRecoveryMfa
-          ? 'ACCOUNT_RECOVERY_MFA_VERIFICATION'
-          : isAccountRecovery
+        : isAccountRecovery
           ? 'ACCOUNT_RECOVERY_VERIFICATION'
           : 'EMAIL_VERIFICATION',
     })
