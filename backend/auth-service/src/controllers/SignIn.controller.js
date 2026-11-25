@@ -62,14 +62,18 @@ async function createChallenge({ user, email, purpose, origin, context, now, res
   return { challenge, otp }
 }
 
-async function sendChallengeEmail(email, otp, purpose) {
+async function sendChallengeEmail(email, otp, purpose, isAccountRecovery = false) {
   const emailVerification = purpose === 'EMAIL_VERIF'
   await sendMail(
     email,
-    emailVerification ? 'Activate Your Rydex Account' : 'Rydex Sign-In Verification',
+    emailVerification
+      ? 'Activate Your Rydex Account'
+      : isAccountRecovery
+        ? 'Rydex Account Recovery Verification'
+        : 'Rydex Sign-In Verification',
     `<div style="font-family:Arial,sans-serif;max-width:600px;margin:auto">
-      <h2>${emailVerification ? 'Verify Your Rydex Account' : 'New Device Sign-In Verification'}</h2>
-      <p>${emailVerification ? 'Use this code to verify your email address.' : 'Use this code to confirm it is you signing in from a new device.'}</p>
+      <h2>${emailVerification ? 'Verify Your Rydex Account' : isAccountRecovery ? 'Verify Account Recovery' : 'New Device Sign-In Verification'}</h2>
+      <p>${emailVerification ? 'Use this code to verify your email address.' : isAccountRecovery ? 'Use this code to confirm you are restoring your account.' : 'Use this code to confirm it is you signing in from a new device.'}</p>
       <h1 style="background:#f4f4f4;padding:10px;text-align:center;letter-spacing:5px">${otp}</h1>
       <p>This code expires in 10 minutes.</p>
     </div>`
@@ -115,6 +119,43 @@ export async function signin(req, res) {
     // Deleted accounts use the documented recovery branch. A matching active
     // trusted device acts as the schema's available same-device proxy.
     if (user.accountStatus === 'DELETED') {
+      if (!user.isVerified) {
+        return res.status(403).json({ success: false, message: 'This account cannot sign in.' })
+      }
+
+      if (!user.passwordHash) {
+        const googleIdentity = await prisma.oauthIdentity.findFirst({
+          where: { userId: user.id, provider: 'GOOGLE' },
+          select: { id: true },
+        })
+        if (googleIdentity) {
+          return res.status(409).json({
+            success: false,
+            message: 'This account uses Google sign-in.',
+            action: 'GOOGLE_OAUTH_SIGNIN',
+            nextStep: 'GOOGLE_OAUTH',
+          })
+        }
+        await verifyDummyPassword(password)
+        return res.status(401).json({ success: false, message: GENERIC_CREDENTIAL_ERROR })
+      }
+
+      let recoveryPasswordValid = false
+      try {
+        recoveryPasswordValid = await bcrypt.compare(password, user.passwordHash)
+      } catch { /* malformed stored hash is treated as invalid */ }
+      if (!recoveryPasswordValid) {
+        await writeAuthAudit({
+          userId: user.id,
+          email,
+          eventType: 'CREDENTIALS_INVALID_PASSWORD',
+          flowIntent: 'CREDENTIALS_SIGNIN',
+          context,
+          metadata: { decision: 'REJECTED', account_status: 'DELETED' },
+        })
+        return res.status(401).json({ success: false, message: GENERIC_CREDENTIAL_ERROR })
+      }
+
       const sameDevice = await prisma.trustedDevice.findUnique({
         where: { userId_deviceFingerprintHash: { userId: user.id, deviceFingerprintHash: context.fingerprint } },
       })
@@ -133,7 +174,7 @@ export async function signin(req, res) {
       }
       const { otp } = await createChallenge({ user, email, purpose: 'STEP_UP_MFA', origin: 'ACCOUNT_RECOVERY', context, now, res })
       try {
-        await sendChallengeEmail(email, otp, 'STEP_UP_MFA')
+        await sendChallengeEmail(email, otp, 'STEP_UP_MFA', true)
       } catch (error) {
         console.error('[auth-service] account recovery OTP email failed:', error)
         return res.status(502).json({ success: false, message: 'Verification was prepared, but email delivery failed. Please request a resend.', nextStep: 'ACCOUNT_RECOVERY_MFA_VERIFICATION' })
@@ -159,7 +200,7 @@ export async function signin(req, res) {
       return res.status(401).json({ success: false, message: GENERIC_CREDENTIAL_ERROR })
     }
 
-    if (user.accountStatus === 'PENDING' || !user.isVerified) {
+    if (!user.isVerified) {
       const { otp } = await createChallenge({ user, email, purpose: 'EMAIL_VERIF', origin: 'ACCOUNT_ACTIVATION', context, now, res })
       try {
         await sendChallengeEmail(email, otp, 'EMAIL_VERIF')

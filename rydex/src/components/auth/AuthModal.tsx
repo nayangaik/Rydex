@@ -108,7 +108,6 @@ export default function AuthModal({ open, onClose }: Props) {
                     inputRefs={auth.otpRefs}
                     loading={auth.loading}
                     resendSeconds={auth.resendSeconds}
-                    recoveryContinuation={auth.recoveryContinuation}
                     onOtpChange={auth.handleOtpChange}
                     onVerify={auth.handleVerifyOtp}
                     onResend={auth.handleResendOtp}
